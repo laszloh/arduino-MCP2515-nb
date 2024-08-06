@@ -8,41 +8,6 @@
 #include "CANPacket.h"
 #include "MCP2515.h"
 
-CANPacket::CANPacket() {
-    memset(_data, 0, sizeof(_data));
-}
-
-CANPacket::~CANPacket() {
-
-}
-
-bool CANPacket::isValid() {
-    return _ended;
-}
-
-bool CANPacket::isExtended() {
-    return _extended;
-}
-
-unsigned long CANPacket::getStatus() {
-    return _status;
-}
-
-long CANPacket::getId() {
-    return _id;
-}
-
-int CANPacket::getDlc() {
-    return _dlc;
-}
-
-int CANPacket::getRtr() {
-    return _rtr;
-}
-
-uint8_t* CANPacket::getData() {
-    return _data;
-}
 
 int CANPacket::startStandard(int id, int dlc, bool rtr) {
     if (_started) {
