@@ -1,0 +1,36 @@
+{
+    "name": "MCP2515",
+    "version": "0.1.0",
+    "authors": [
+      {
+          "name": "laszloh",
+          "email": "laszlo.hegedues@gmail.com"
+      },
+      {
+          "name": "WitchCraftWorks Team"
+      }
+    ],
+    "license": "Apache-2.0",
+    "description": "Supports Microchip MCP2515 based boards/shields and non-blocking write operations.",
+    "repository": {
+      "type": "git",
+      "url": "https://github.com/laszloh/arduino-MCP2515-nb.git"
+    },
+    "dependencies": {
+      "etlcpp/Embedded Template Library": "^20.38.11",
+      
+    },
+    "build": {
+      "flags": "-DETL_NO_STL"
+    },
+    "export": {
+      "include": [
+        "src",
+        "examples",
+        "LICENSE",
+        "README.md"
+      ]
+    },
+    "platforms": "*",
+    "frameworks": "*"
+  }

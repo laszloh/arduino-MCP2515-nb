@@ -11,12 +11,9 @@
 #undef max
 #undef min
 
-#ifdef ARDUINO_ARCH_AVR
-# include <avr_stl.h>
-#endif
-
 #ifndef MCP2515_DISABLE_ASYNC_TX_QUEUE
-# include <queue>
+    #include <etl/queue>
+    #include <queue>
 #endif
 
 #include <Arduino.h>
@@ -26,37 +23,39 @@
 #undef OVERFLOW
 
 #if defined(ARDUINO_ARCH_SAMD)
-# define __MCP2515_MULTI_INTERRUPTS_ENABLE__ 1
+    #define __MCP2515_MULTI_INTERRUPTS_ENABLE__ 1
 #else
-# undef __MCP2515_MULTI_INTERRUPTS_ENABLE__
+    #undef __MCP2515_MULTI_INTERRUPTS_ENABLE__
 #endif
 
-enum MCP2515_CAN_CLOCK {
-    MCP_8MHZ = (long)8e6,
-    MCP_16MHZ = (long)16e6
+enum class MCP2515_CAN_CLOCK : uint8_t {
+    MCP_8MHZ = 0,
+    MCP_16MHZ
 };
 
-enum MCP2515_CAN_SPEED {
-    CAN_5KBPS = (long)5e3,
-    CAN_10KBPS = (long)10e3,
-    CAN_20KBPS = (long)20e3,
-    CAN_40KBPS = (long)40e3,
-    CAN_50KBPS = (long)50e3,
-    CAN_80KBPS = (long)80e3,
-    CAN_100KBPS = (long)100e3,
-    CAN_125KBPS = (long)125e3,
-    CAN_200KBPS = (long)200e3,
-    CAN_250KBPS = (long)250e3,
-    CAN_500KBPS = (long)500e3,
-    CAN_1000KBPS = (long)1000e3
+enum class MCP2515_CAN_SPEED : uint8_t {
+    CAN_5KBPS = 0,
+    CAN_10KBPS,
+    CAN_20KBPS,
+    CAN_40KBPS,
+    CAN_50KBPS,
+    CAN_80KBPS,
+    CAN_100KBPS,
+    CAN_125KBPS,
+    CAN_200KBPS,
+    CAN_250KBPS,
+    CAN_500KBPS,
+    CAN_1000KBPS,
+
+    _max
 };
 
-enum MCP2515_CAN_MASK {
+enum class MCP2515_CAN_MASK : uint8_t {
     MASK0 = 0,
     MASK1 = 1
 };
 
-enum MCP2515_CAN_RXF {
+enum class MCP2515_CAN_RXF : uint8_t {
     RXF0 = 0,
     RXF1 = 1,
     RXF2 = 2,
@@ -65,7 +64,7 @@ enum MCP2515_CAN_RXF {
     RXF5 = 5
 };
 
-enum MCP2515_ERRORCODES {
+enum class MCP2515_ERRORCODES {
     OK = 0,
     PERM = -1,
     NOENT = -2,
@@ -78,7 +77,7 @@ enum MCP2515_ERRORCODES {
     OVERFLOW = -75
 };
 
-enum MCP2515_MODES {
+enum class MCP2515_MODES {
     NORMAL = 0,
     LOOPBACK = 1,
     LISTEN = 2,
@@ -96,19 +95,13 @@ class CANPacket;
 #define MCP2515_DEFAULT_CS_PIN  10
 #define MCP2515_DEFAULT_INT_PIN 2
 
-struct _mcp_cnf_frequency {
-    uint8_t one;
-    uint8_t two;
-    uint8_t three;
-};
-
 class MCP2515 {
 
 public:
-    MCP2515();
+    MCP2515(int CSPin = MCP2515_DEFAULT_CS_PIN, int intPin = MCP2515_DEFAULT_INT_PIN, MCP2515_CAN_CLOCK clockFrequency = MCP2515_CAN_CLOCK::MCP_16MHZ, SPIClass &spi = SPI);
     ~MCP2515();
 
-    int begin(long baudRate);
+    int begin(MCP2515_CAN_SPEED baudRate);
     void end();
 
     uint8_t getStatus();
@@ -116,7 +109,7 @@ public:
 
     void setPins(int cs = MCP2515_DEFAULT_CS_PIN, int irq = MCP2515_DEFAULT_INT_PIN);
     void setSPIFrequency(uint32_t frequency);
-    void setClockFrequency(long clockFrequency);
+    void setClockFrequency(MCP2515_CAN_CLOCK clockFrequency);
 
     int setMask(const MCP2515_CAN_MASK num, bool extended, uint32_t mask);
     int setFilter(const MCP2515_CAN_RXF num, bool extended, uint32_t filter);
@@ -143,6 +136,7 @@ public:
 
     static void onInterrupt();
     void _handleInterruptPacket();
+
 private:
     void reset();
 
@@ -152,23 +146,21 @@ private:
 
     int handleMessageTransmit(CANPacket* packet, int n, bool cond);
 
-    bool getCnfForClockFrequency8e6(long baudRate, _mcp_cnf_frequency* cnf);
-    bool getCnfForClockFrequency16e6(long baudRate, _mcp_cnf_frequency* cnf);
-
 private:
     int _csPin;
     int _intPin;
-    long _clockFrequency;
-    SPISettings _spiSettings;
+    MCP2515_CAN_CLOCK _clockFrequency;
+    SPISettings _spiSettings{10e6, MSBFIRST, SPI_MODE0};
+    SPIClass &_spi;
 
     void (*_onReceivePacket)(CANPacket*);
 
-    bool _oneShotMode = false;
-    bool _allowInvalidRx = false;
-    uint8_t _rxErrorCount = 0;
+    bool _oneShotMode{false};
+    bool _allowInvalidRx{false};
+    uint8_t _rxErrorCount{0};
 
 #ifndef MCP2515_DISABLE_ASYNC_TX_QUEUE
-    std::queue<CANPacket*> _canpacketTxQueue;
+    etl::queue<CANPacket*, MCP2515_CANPACKET_TX_QUEUE_SIZE> _canpacketTxQueue{};
 #endif
 };
 

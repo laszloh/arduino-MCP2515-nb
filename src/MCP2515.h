@@ -13,6 +13,6 @@
 #endif
 
 #include "internal/MCP2515.h"
-#include "internal/CANPacket.h"
+#include "internal/CANPacket.hpp"
 
 #endif

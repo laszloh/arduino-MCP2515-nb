@@ -4,8 +4,9 @@
  *
  * Licensed under Apache 2.0
  */
+#pragma once
 
-#include "CANPacket.h"
+#include "CANPacket.hpp"
 
 static inline __attribute__((always_inline))
 int determineReturnCodeByPacketStatus(CANPacket* packet) {

@@ -11,38 +11,33 @@
 #include <Arduino.h>
 #include "MCP2515.h"
 
+#include <etl/vector>
+#include <vector>
+#include <bitmask.hpp>
+
+enum class CanPacketStatus {
+    RX_OK = (1<<0),
+    RX_INVALID_MESSAGE = (1 << 1),
+
+    TX_PENDING = (1 << 2),
+    TX_WRITTEN = (1 << 3), // packet written to CAN controller, confirmation pending
+    TX_SENT = (1 << 4),
+
+    TX_ABORT_REQUESTED = (1 << 5),
+    TX_ABORTED = (1 << 6),
+
+    TX_ERROR = (1 << 7),
+
+    _bitmask_max_element = TX_ERROR
+};
+BITMASK_DEFINE(CanPacketStatus)
+
 class CANPacket : public Print {
     friend class MCP2515;
 
 public:
-    struct Status{
-        bool rxOK : 1;
-        bool rxInvalidMessage : 1;
-        bool txPending : 1;
-        bool txWritten : 1;
-        bool txSend : 1;
-        bool txAbortRequest : 1;
-        bool txAborted : 1;
-        bool txError : 1;
 
-        Status() : rxOk(false), rxInvalidMessage(false), txPending(false), 
-                    txWritten(false), txSend(false), txAbortRequest(false), txAborted(false), txError(false) { }
-
-    };
-    // static constexpr size_t x = sizeof(Status);
-    // static const unsigned long STATUS_RX_OK = (1 << 0);
-    // static const unsigned long STATUS_RX_INVALID_MESSAGE = (1 << 1);
-
-    // static const unsigned long STATUS_TX_PENDING = (1 << 4);
-    // static const unsigned long STATUS_TX_WRITTEN = (1 << 5); // packet written to CAN controller, confirmation pending
-    // static const unsigned long STATUS_TX_SENT = (1 << 7);
-
-    // static const unsigned long STATUS_TX_ABORT_REQUESTED = (1 << 10);
-    // static const unsigned long STATUS_TX_ABORTED = (1 << 11);
-
-    // static const unsigned long STATUS_TX_ERROR = (1 << 14);
-
-    CANPacket() { memset(data, 0, sizeof(data)); }
+    CANPacket() = default;
     ~CANPacket() = default;
 
     // copy operators
@@ -55,10 +50,10 @@ public:
 
     bool isValid() const { return _ended; }
     bool isExtended() const { return _extended; }
-    uint32_t getStatus() const { return _status; }
+    bitmask::bitmask<CanPacketStatus> getStatus() const { return _status; }
 
     uint32_t getId() const { return _id; }
-    int getDlc() const { return _dlc; }
+    int getDlc() const { return _data.size(); }
     int getRtr() const { return _rtr; };
     uint8_t* getData() const { return data; }
 
@@ -71,18 +66,26 @@ public:
             setWriteError(MCP2515_ERRORCODES::PERM);
             return 0;
         }
-        if(_dataLength >= 8 || size > (sizeof(_data) - _dataLength)) {
+        if(_data.full() || size > _data.available()) {
             setWriteError(MCP2515_ERRORCODES::INVAL);
             return 0;
         }
-        memcpy(data + _dataLength, buffer, size);
+        std::copy(std::begin(buffer), std::begin(buffer) + size, std::advance(_data.begin(), _dataLength));
         _dataLength += size;
         clearWriteError();
         return size;
     }
-    virtual int availableForWrite() override { return sizeof(data) - _dataLength; }
+    virtual int availableForWrite() override { return _data.available(); }
 
-    int end();
+    int end() {
+        if (!_started) {
+            return MCP2515_ERRORCODES::PERM;
+        }
+
+        _ended = true;
+
+        return MCP2515_ERRORCODES::OK;
+    }
 
 private:
     int startCanPacket(uint32_t id, int dlc, bool rtr, bool extended) {
@@ -94,23 +97,25 @@ private:
 
         if (dlc > 8)
             return MCP2515_ERRORCODES::INVAL;
+        else if(dlc >= 0)
+            _data.resize(dlc);
 
         _extended = extended;
-        _dlc = dlc;
         _rtr = rtr;
+        _data.clear();
     }
 
     bool _started{false};
     bool _ended{false};
     bool _aborted{false};
-    uint32_t _status{0};
+    bitmask::bitmask<CanPacketStatus> status{};
 
     bool _extended{false};
     uint32_t _id{0};
-    int _dlc{-1};
     bool _rtr{false};
-    uint8_t _data[8];
-    uint8_t _dataLength{0};
+    etl::vector<uint8_t, 8> _data{};
+
+    return MCP2515_ERRORCODES::OK;
 };
 
 static constexpr size_t x = sizeof(CANPacket);

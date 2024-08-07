@@ -6,41 +6,66 @@
  */
 
 #include "MCP2515.h"
-#include "CANPacket.h"
-#include "Utilities.cpp"
+#include "CANPacket.hpp"
+#include "Utilities.hpp"
+
+#include <array>
+#include <type_traits>
 
 #define TX_BUFFER_NUM 0
 
-#define REG_BFPCTRL 0x0C
-#define REG_TXRTSCTRL 0x0D
+enum class REG : uint8_t {
+    BFPCTRL = 0x0C,
+    TXRTSCTRL = 0x0D,
 
-#define REG_CANSTAT 0x0E
-#define REG_CANCTRL 0x0F
+    CANSTAT = 0x0E,
+    CANCTRL = 0x0F,
 
-#define REG_TX_ERROR_COUNTER 0x1C
-#define REG_RX_ERROR_COUNTER 0x1D
+    TX_ERROR_COUNTER = 0x1C,
+    RX_ERROR_COUNTER = 0x1D,
 
-#define REG_CNF3 0x28
-#define REG_CNF2 0x29
-#define REG_CNF1 0x2A
+    CNF3 = 0x28,
+    CNF2 = 0x29,
+    CNF1 = 0x2A,
 
-#define REG_CANINTE 0x2B
-#define REG_CANINTF 0x2C
-#define REG_EFLG 0x2D
+    CANINTE = 0x2B,
+    CANINTF = 0x2C,
+    EFLG = 0x2D,
+
+};
+
 
 #define FLAG_RXnIE(n) (0x01 << n)
 #define FLAG_RXnIF(n) (0x01 << n)
 #define FLAG_TXnIF(n) (0x04 << n)
 
-#define REG_RXFnSIDH(n) ((n) < 3 ? (0x00 + (n) * 4) : (0x10 + ((n) - 3) * 4))
-#define REG_RXFnSIDL(n) ((n) < 3 ? (0x01 + (n) * 4) : (0x11 + ((n) - 3) * 4))
-#define REG_RXFnEID8(n) ((n) < 3 ? (0x02 + (n) * 4) : (0x12 + ((n) - 3) * 4))
-#define REG_RXFnEID0(n) ((n) < 3 ? (0x03 + (n) * 4) : (0x13 + ((n) - 3) * 4))
 
-#define REG_RXMnSIDH(n) (0x20 + (n * 0x04))
-#define REG_RXMnSIDL(n) (0x21 + (n * 0x04))
-#define REG_RXMnEID8(n) (0x22 + (n * 0x04))
-#define REG_RXMnEID0(n) (0x23 + (n * 0x04))
+enum class RxRegMaskFilter : uint8_t {
+    SIDH = 0x00,
+    SIDL = 0x01,
+    EIDH_D8 = 0x02,
+    EIDL_D0 = 0x03
+};
+
+static constexpr uint8_t genRegRxFilterN(uint8_t n, RxRegMaskFilter type) {
+    auto regBase = static_cast<std::underlying_type_t<RxRegMaskFilter>>(type);
+    return (n < 3) ? (regBase + n * 4) : (0x10 + regBase + (n - 3) * 4);
+}
+
+static constexpr uint8_t REG_RXFnSIDH(uint8_t n) { return genRegRxFilterN(n, RxRegMaskFilter::SIDH); }
+static constexpr uint8_t REG_RXFnSIDL(uint8_t n) { return genRegRxFilterN(n, RxRegMaskFilter::SIDL); }
+static constexpr uint8_t REG_RXFnEID8(uint8_t n) { return genRegRxFilterN(n, RxRegMaskFilter::EIDH_D8); }
+static constexpr uint8_t REG_RXFnEID0(uint8_t n) { return genRegRxFilterN(n, RxRegMaskFilter::EIDL_D0); }
+
+static constexpr uint8_t genRegRxMaskN(uint8_t n, RxRegMaskFilter type) {
+    auto regBase = 0x20 + static_cast<std::underlying_type_t<RxRegMaskFilter>>(type);
+    return regBase + (n * 4);
+}
+
+static constexpr uint8_t REG_RXMnSIDH(uint8_t n) { return genRegRxMaskN(n, RxRegMaskFilter::SIDH); }
+static constexpr uint8_t REG_RXMnSIDL(uint8_t n) { return genRegRxMaskN(n, RxRegMaskFilter::SIDL); }
+static constexpr uint8_t REG_RXMnEID8(uint8_t n) { return genRegRxMaskN(n, RxRegMaskFilter::EIDH_D8); }
+static constexpr uint8_t REG_RXMnEID0(uint8_t n) { return genRegRxMaskN(n, RxRegMaskFilter::EIDL_D0); }
 
 #define REG_TXBnCTRL(n) (0x30 + (n * 0x10))
 #define REG_TXBnSIDH(n) (0x31 + (n * 0x10))
@@ -65,6 +90,67 @@
 
 #define FLAG_RXM0 0x20
 #define FLAG_RXM1 0x40
+
+struct McpCfgFrequency {
+    uint8_t one{0};
+    uint8_t two{0};
+    uint8_t three{0};
+
+    constexpr McpCfgFrequency() = default;
+    constexpr McpCfgFrequency(uint8_t one, uint8_t two, uint8_t three): one(one), two(two), three(three) {}
+
+    constexpr McpCfgFrequency(const McpCfgFrequency &left) {
+        one = left.one;
+        two = left.two;
+        three = left.three;
+    }
+};
+
+constexpr bool getCnfForClockFrequency8e6(MCP2515_CAN_SPEED baudRate, McpCfgFrequency &cnf) {
+    constexpr McpCfgFrequency  configs[] = {
+        {0x1F, 0xBF, 0x07},  //    5 kBd
+        {0x0F, 0xBF, 0x07},  //   10 kBd
+        {0x07, 0xBF, 0x07},  //   20 kBd
+        {0x03, 0xBF, 0x07},  //   40 kBd
+        {0x03, 0xB4, 0x06},  //   50 kBd
+        {0x01, 0xB4, 0x07},  //   80 kBd
+        {0x01, 0xB4, 0x06},  //  100 kBd
+        {0x01, 0xB1, 0x05},  //  125 kBd
+        {0x00, 0xB4, 0x06},  //  200 kBd
+        {0x00, 0xB1, 0x05},  //  250 kBd
+        {0x00, 0x90, 0x02},  //  500 kBd
+        {0x00, 0x80, 0x00},  // 1000 kBd
+    };
+
+    if(baudRate >= _max)
+        return false;
+
+    cnf = McpCfgFrequency(configs[baudRate]);
+    return true;
+}
+
+constexpr bool getCnfForClockFrequency16e6(MCP2515_CAN_SPEED baudRate, McpCfgFrequency &cnf) {
+    constexpr McpCfgFrequency configs[] = {
+        {0x3F, 0xFF, 0x87},  //    5 kBd
+        {0x1F, 0xFF, 0x87},  //   10 kBd
+        {0x0F, 0xFF, 0x87},  //   20 kBd
+        {0x07, 0xFF, 0x87},  //   40 kBd
+        {0x07, 0xFA, 0x87},  //   50 kBd
+        {0x03, 0xFF, 0x87},  //   80 kBd
+        {0x03, 0xFA, 0x87},  //  100 kBd
+        {0x03, 0xF0, 0x86},  //  125 kBd
+        {0x01, 0xFA, 0x87},  //  200 kBd
+        {0x41, 0xF1, 0x85},  //  250 kBd
+        {0x00, 0xF0, 0x06},  //  500 kBd
+        {0x00, 0xD0, 0x80},  // 1000 kBd
+    };
+
+    if(baudRate >= _max)
+        return false;
+
+    cnf = McpCfgFrequency(configs[baudRate]);;
+    return true;
+}
 
 // ----------- Interrupt garbage -----------
 
@@ -152,26 +238,21 @@ void _mcp_interrupts_remove(uint8_t pin, MCP2515* mcp) {
 
 // ----------- End Interrupt Garbage -----------
 
-MCP2515::MCP2515() :
-    _csPin(MCP2515_DEFAULT_CS_PIN),
-    _intPin(MCP2515_DEFAULT_INT_PIN),
-    _clockFrequency(16e6),
-    _spiSettings(10e6, MSBFIRST, SPI_MODE0),
-#ifndef MCP2515_DISABLE_ASYNC_TX_QUEUE
-    _canpacketTxQueue(std::queue<CANPacket*>())
-#endif
-{
-}
+MCP2515::MCP2515(int CSPin, int intPin, MCP2515_CAN_CLOCK clockFrequency, SPIClass &spi) :
+    _csPin(CSPin),
+    _intPin(intPin),
+    _clockFrequency(clockFrequency),
+    _spi(spi),
+{ }
 
 MCP2515::~MCP2515() {
 #ifndef MCP2515_DISABLE_ASYNC_TX_QUEUE
-    while (!_canpacketTxQueue.empty()) {
-        _canpacketTxQueue.pop();
-    }
+    _canpacketTxQueue.clear();
 #endif
 }
 
-int MCP2515::begin(long baudRate) {
+int MCP2515::begin(MCP2515_CAN_SPEED baudRate) {
+    digitalWrite(_csPin, HIGH);
     pinMode(_csPin, OUTPUT);
 
     SPI.begin();
@@ -182,15 +263,15 @@ int MCP2515::begin(long baudRate) {
         return MCP2515_ERRORCODES::BADF;
     }
 
-    _mcp_cnf_frequency cnf;
+    McpCfgFrequency cnf;
     bool cnf_valid = false;
 
     switch (_clockFrequency) {
-        case (long)8e6:
-            cnf_valid = getCnfForClockFrequency8e6(baudRate, &cnf);
+        case MCP_8MHZ:
+            cnf_valid = getCnfForClockFrequency8e6(baudRate, cnf);
             break;
-        case (long)16e6:
-            cnf_valid = getCnfForClockFrequency16e6(baudRate, &cnf);
+        case MCP_16MHZ:
+            cnf_valid = getCnfForClockFrequency16e6(baudRate, cnf);
             break;
     };
 
@@ -222,11 +303,11 @@ void MCP2515::end() {
 }
 
 uint8_t MCP2515::getStatus() {
-    return readRegister(REG_CANSTAT);
+    return readRegister(REG::CANSTAT);
 }
 
 uint8_t MCP2515::getErrorFlags() {
-    return readRegister(REG_EFLG);
+    return readRegister(REG::EFLG);
 }
 
 void MCP2515::setPins(int cs, int irq) {
@@ -235,16 +316,16 @@ void MCP2515::setPins(int cs, int irq) {
 }
 
 void MCP2515::setSPIFrequency(uint32_t frequency) {
-    _spiSettings = SPISettings(frequency, MSBFIRST, SPI_MODE0);
+    _spiSettings._clock = frequency;
 }
 
-void MCP2515::setClockFrequency(long clockFrequency) {
+void MCP2515::setClockFrequency(MCP2515_CAN_CLOCK clockFrequency) {
     _clockFrequency = clockFrequency;
 }
 
 int MCP2515::setMask(const MCP2515_CAN_MASK num, bool extended, uint32_t mask) {
-    writeRegister(REG_CANCTRL, 0x80);
-    if (readRegister(REG_CANCTRL) != 0x80) {
+    writeRegister(REG::CANCTRL, 0x80);
+    if (readRegister(REG::CANCTRL) != 0x80) {
         return MCP2515_ERRORCODES::BADF;
     }
 
@@ -272,8 +353,8 @@ int MCP2515::setMask(const MCP2515_CAN_MASK num, bool extended, uint32_t mask) {
     writeRegister(REG_RXMnSIDH(num), sidh);
     writeRegister(REG_RXMnSIDL(num), sidl);
 
-    writeRegister(REG_CANCTRL, 0x00);
-    if (readRegister(REG_CANCTRL) != 0x00) {
+    writeRegister(REG::CANCTRL, 0x00);
+    if (readRegister(REG::CANCTRL) != 0x00) {
         return MCP2515_ERRORCODES::BADF;
     }
 
@@ -281,8 +362,8 @@ int MCP2515::setMask(const MCP2515_CAN_MASK num, bool extended, uint32_t mask) {
 }
 
 int MCP2515::setFilter(const MCP2515_CAN_RXF num, bool extended, uint32_t filter) {
-    writeRegister(REG_CANCTRL, 0x80);
-    if (readRegister(REG_CANCTRL) != 0x80) {
+    writeRegister(REG::CANCTRL, 0x80);
+    if (readRegister(REG::CANCTRL) != 0x80) {
         return MCP2515_ERRORCODES::BADF;
     }
 
@@ -310,8 +391,8 @@ int MCP2515::setFilter(const MCP2515_CAN_RXF num, bool extended, uint32_t filter
     writeRegister(REG_RXFnSIDH(num), sidh);
     writeRegister(REG_RXFnSIDL(num), sidl);
 
-    writeRegister(REG_CANCTRL, 0x00);
-    if (readRegister(REG_CANCTRL) != 0x00) {
+    writeRegister(REG::CANCTRL, 0x00);
+    if (readRegister(REG::CANCTRL) != 0x00) {
         return MCP2515_ERRORCODES::BADF;
     }
 
@@ -469,8 +550,7 @@ int MCP2515::receivePacket(CANPacket* packet) {
         packet->_rtr = (sidl & FLAG_SRR ? true : false);
     }
 
-    packet->_dlc = readRegister(REG_RXBnDLC(n)) & 0x0F;
-
+    const uint8_t dlc = readRegister(REG_RXBnDLC(n)) & 0x0F;
     if (packet->_rtr) {
         modifyRegister(REG_CANINTF, FLAG_RXnIF(n), 0x00);
     } else {
@@ -480,7 +560,7 @@ int MCP2515::receivePacket(CANPacket* packet) {
 
         SPI.transfer((0x92 | (n << 2)));
 
-        for (int i = 0; i < packet->_dlc; i++) {
+        for (int i = 0; i < dlc; i++) {
             packet->writeData(SPI.transfer(0x00));
         }
 
@@ -645,10 +725,11 @@ int MCP2515::writePacket(CANPacket* packet, bool nowait) {
         writeRegister(REG_TXBnEID0(n), 0x00);
     }
 
+    const uint8_t dlc = packet->getDlc();
     if (packet->_rtr) {
-        writeRegister(REG_TXBnDLC(n), 0x40 | packet->_dlc);
+        writeRegister(REG_TXBnDLC(n), 0x40 | dlc);
     } else {
-        writeRegister(REG_TXBnDLC(n), packet->_dlc);
+        writeRegister(REG_TXBnDLC(n), dlc);
 
         // LOAD TX BUFFER
         SPI.beginTransaction(_spiSettings);
@@ -656,7 +737,7 @@ int MCP2515::writePacket(CANPacket* packet, bool nowait) {
 
         SPI.transfer(0x41);
 
-        for (int i = 0; i < packet->_dlc; i++) {
+        for (int i = 0; i < dlc; i++) {
             SPI.transfer(packet->_data[i]);
         }
 
@@ -772,140 +853,6 @@ int MCP2515::handleMessageTransmit(CANPacket* packet, int n, bool cond) {
     }
 
     return status;
-}
-
-bool MCP2515::getCnfForClockFrequency8e6(long baudRate, _mcp_cnf_frequency* cnf) {
-    switch (baudRate) {
-        case (long)1000e3:
-            (*cnf).one = 0x00;
-            (*cnf).two = 0x80;
-            (*cnf).three = 0x00;
-            return true;
-        case (long)500e3:
-            (*cnf).one = 0x00;
-            (*cnf).two = 0x90;
-            (*cnf).three = 0x02;
-            return true;
-        case (long)250e3:
-            (*cnf).one = 0x00;
-            (*cnf).two = 0xB1;
-            (*cnf).three = 0x05;
-            return true;
-        case (long)200e3:
-            (*cnf).one = 0x00;
-            (*cnf).two = 0xB4;
-            (*cnf).three = 0x06;
-            return true;
-        case (long)125e3:
-            (*cnf).one = 0x01;
-            (*cnf).two = 0xB1;
-            (*cnf).three = 0x05;
-            return true;
-        case (long)100e3:
-            (*cnf).one = 0x01;
-            (*cnf).two = 0xB4;
-            (*cnf).three = 0x06;
-            return true;
-        case (long)80e3:
-            (*cnf).one = 0x01;
-            (*cnf).two = 0xBF;
-            (*cnf).three = 0x07;
-            return true;
-        case (long)50e3:
-            (*cnf).one = 0x03;
-            (*cnf).two = 0xB4;
-            (*cnf).three = 0x06;
-            return true;
-        case (long)40e3:
-            (*cnf).one = 0x03;
-            (*cnf).two = 0xBF;
-            (*cnf).three = 0x07;
-            return true;
-        case (long)20e3:
-            (*cnf).one = 0x07;
-            (*cnf).two = 0xBF;
-            (*cnf).three = 0x07;
-            return true;
-        case (long)10e3:
-            (*cnf).one = 0x0F;
-            (*cnf).two = 0xBF;
-            (*cnf).three = 0x07;
-            return true;
-        case (long)5e3:
-            (*cnf).one = 0x1F;
-            (*cnf).two = 0xBF;
-            (*cnf).three = 0x07;
-            return true;
-    };
-
-    return false;
-}
-
-bool MCP2515::getCnfForClockFrequency16e6(long baudRate, _mcp_cnf_frequency* cnf) {
-    switch (baudRate) {
-        case (long)1000e3:
-            (*cnf).one = 0x00;
-            (*cnf).two = 0xD0;
-            (*cnf).three = 0x82;
-            return true;
-        case (long)500e3:
-            (*cnf).one = 0x00;
-            (*cnf).two = 0xF0;
-            (*cnf).three = 0x86;
-            return true;
-        case (long)250e3:
-            (*cnf).one = 0x41;
-            (*cnf).two = 0xF1;
-            (*cnf).three = 0x85;
-            return true;
-        case (long)200e3:
-            (*cnf).one = 0x01;
-            (*cnf).two = 0xFA;
-            (*cnf).three = 0x87;
-            return true;
-        case (long)125e3:
-            (*cnf).one = 0x03;
-            (*cnf).two = 0xF0;
-            (*cnf).three = 0x86;
-            return true;
-        case (long)100e3:
-            (*cnf).one = 0x03;
-            (*cnf).two = 0xFA;
-            (*cnf).three = 0x87;
-            return true;
-        case (long)80e3:
-            (*cnf).one = 0x03;
-            (*cnf).two = 0xFF;
-            (*cnf).three = 0x87;
-            return true;
-        case (long)50e3:
-            (*cnf).one = 0x07;
-            (*cnf).two = 0xFA;
-            (*cnf).three = 0x87;
-            return true;
-        case (long)40e3:
-            (*cnf).one = 0x07;
-            (*cnf).two = 0xFF;
-            (*cnf).three = 0x87;
-            return true;
-        case (long)20e3:
-            (*cnf).one = 0x0F;
-            (*cnf).two = 0xFF;
-            (*cnf).three = 0x87;
-            return true;
-        case (long)10e3:
-            (*cnf).one = 0x1F;
-            (*cnf).two = 0xFF;
-            (*cnf).three = 0x87;
-            return true;
-        case (long)5e3:
-            (*cnf).one = 0x3F;
-            (*cnf).two = 0xFF;
-            (*cnf).three = 0x87;
-            return true;
-    }
-
-    return false;
 }
 
 void MCP2515::onInterrupt() {
